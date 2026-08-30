@@ -14,7 +14,8 @@ Below are the recorded walkthroughs of these simulations with a technical analys
 ### 1. Naive vs. Flash Memory Scaling Race
 This simulation shows standard attention's quadratic $O(N^2)$ memory explosion compared side-by-side with FlashAttention's linear $O(N)$ memory footprints as the sequence length $N$ scales from 1 to 64.
 
-![Comparison Video](Recordings/Comparison.mp4)
+[![Watch Memory scaling race comparison](Recordings/Comparison.png)](Recordings/Comparison.mp4)
+*👉 Click the preview above to play the Comparison.mp4 video*
 
 **Key Inference:**
 - **Standard Attention (Red Line):** Curves quadratically upward. At $N=64$, standard attention consumes **2.46 MB** of HBM to store the full attention matrix. In actual LLMs with large batch sizes and multiple heads, this footprint easily exceeds GPU SRAM memory limits (modeled by the 10,000 MB barrier in the simulation), creating a massive HBM read/write bottleneck.
@@ -30,7 +31,8 @@ This simulation shows standard attention's quadratic $O(N^2)$ memory explosion c
 ### 2. Tiling & Online Softmax Flow
 This simulation walks through FlashAttention's tiling mechanism on a $10 \times 10$ attention matrix partitioned into $5 \times 5$ blocks.
 
-![Flash Attention Video](Recordings/Flash%20Attention.mp4)
+[![Watch Tiling and Online Softmax flow](Recordings/Flash%20Attention.png)](Recordings/Flash%20Attention.mp4)
+*👉 Click the preview above to play the Flash Attention.mp4 video*
 
 **Key Inference:**
 - Instead of computing all 100 cells at once, FlashAttention loads one row tile ($Q_i$) and column tile ($K_j$) into fast on-chip **SRAM**.
@@ -42,7 +44,8 @@ This simulation walks through FlashAttention's tiling mechanism on a $10 \times 
 ### 3. Naive Attention Cell-by-Cell Processing
 This simulation demonstrates standard attention's naive process, showing how it must compute and store the full matrix layout to calculate softmax probabilities.
 
-![Standard Attention Video](Recordings/Standard%20Attention.mp4)
+[![Watch Standard Attention cell processing](Recordings/Standard%20Attention.png)](Recordings/Standard%20Attention.mp4)
+*👉 Click the preview above to play the Standard Attention.mp4 video*
 
 **Key Inference:**
 - Every single cell in this grid represents an embedding dot product ($Q_i \cdot K_j$) that must be written out to slow HBM before softmax can run.
