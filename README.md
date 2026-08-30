@@ -2,6 +2,7 @@
 
 > **From Naive Attention to FlashAttention-3** — a complete benchmark suite and step-by-step PyTorch simulation tracking how attention went from a memory-bound bottleneck to a hardware-optimized kernel running at 75% of peak GPU throughput.
 
+Related article: [The Great Memory Race: Understanding the Foundational Bottleneck Behind FlashAttention](https://drahulprasanth.substack.com/p/the-great-memory-race-understanding?r=8xw9mx&utm_campaign=post&utm_medium=web)
 
 ---
 
