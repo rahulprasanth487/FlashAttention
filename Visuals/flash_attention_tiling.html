@@ -1,0 +1,686 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Flash Attention - Tiling and Online Softmax</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+:root{
+  --bg:#060a12;--panel:#0c1828;--border:#1a3050;
+  --cyan:#00e5ff;--mag:#ff00cc;--gold:#ffd700;--green:#00e870;--red:#ff4455;
+  --text:#9ab8d4;--dim:#3a5a7a;--r:8px;
+}
+html,body{width:100%;height:100vh;overflow:hidden;background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;}
+body{display:flex;flex-direction:column;}
+
+/* ── HEADER ───────────────────────────────── */
+#hdr{
+  flex-shrink:0;height:68px;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 16px;gap:14px;
+  background:var(--panel);border-bottom:1.5px solid var(--border);
+}
+.title-block h1{
+  font-size:1.05rem;font-weight:800;white-space:nowrap;
+  background:linear-gradient(90deg,var(--cyan),var(--mag));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+}
+.title-block p{font-size:0.62rem;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;margin-top:2px;}
+.mem-cards{display:flex;gap:8px;flex-shrink:0;}
+.mcard{
+  display:flex;align-items:center;gap:8px;
+  background:#09131f;border:1.5px solid var(--border);border-radius:var(--r);padding:6px 10px;
+}
+.mcard.bad{border-color:rgba(255,68,85,0.4);}
+.mcard.good{border-color:rgba(0,229,255,0.4);}
+.mcard-icon{flex-shrink:0;}
+.mcard-text .mn{font-size:.6rem;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);}
+.mcard-text .mv{font-size:.82rem;font-weight:800;}
+.mcard.bad .mv{color:#ff6677;}
+.mcard.good .mv{color:var(--cyan);}
+.mcard-text .ms{font-size:.58rem;color:var(--dim);}
+
+/* ── MAIN ─────────────────────────────────── */
+#main{flex:1;display:flex;gap:12px;padding:10px 14px;min-height:0;overflow:hidden;}
+
+/* ── CANVAS AREA ──────────────────────────── */
+#canvas-area{flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:8px;min-height:0;}
+#cv-outer{background:#08101e;border:1.5px solid var(--border);border-radius:var(--r);padding:8px;box-shadow:0 0 28px rgba(0,229,255,0.06);}
+canvas{display:block;image-rendering:crisp-edges;}
+
+/* Tile progress dots (2x2 grid) */
+#tile-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;}
+.td{
+  display:flex;flex-direction:column;align-items:center;gap:2px;
+}
+.td-box{
+  width:52px;height:32px;border-radius:5px;
+  border:1.5px solid var(--border);background:#091420;
+  display:flex;align-items:center;justify-content:center;
+  font-size:.65rem;font-weight:700;color:var(--dim);
+  transition:all .3s;
+}
+.td-box.active{border-color:var(--gold);color:var(--gold);background:rgba(255,215,0,.1);box-shadow:0 0 10px rgba(255,215,0,.4);}
+.td-box.done{border-color:var(--green);color:var(--green);background:rgba(0,232,112,.1);}
+.td-lbl{font-size:.52rem;color:var(--dim);text-align:center;}
+
+/* ── RIGHT PANEL ──────────────────────────── */
+#right{flex:1;display:flex;flex-direction:column;gap:8px;min-width:0;min-height:0;overflow:hidden;}
+
+/* Tile header */
+#tile-hdr{
+  flex-shrink:0;background:var(--panel);border:1.5px solid var(--border);
+  border-radius:var(--r);padding:8px 12px;
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+}
+.th-left{}
+.th-title{font-size:.9rem;font-weight:800;color:var(--gold);}
+.th-sub{font-size:.65rem;color:var(--dim);margin-top:2px;}
+.th-right{display:flex;flex-direction:column;align-items:flex-end;gap:2px;}
+#step-badge{
+  font-size:.68rem;font-weight:700;color:var(--gold);
+  background:rgba(255,215,0,.08);border:1px solid rgba(255,215,0,.25);
+  border-radius:999px;padding:2px 10px;white-space:nowrap;
+}
+.th-substep{font-size:.58rem;color:var(--dim);text-align:right;}
+
+/* Formula panel */
+#formula-panel{
+  flex:1;min-height:0;display:flex;flex-direction:column;
+  background:var(--panel);border:1.5px solid var(--border);border-radius:var(--r);
+  padding:10px 12px;gap:0;overflow:hidden;
+}
+.fp-lbl{font-size:.58rem;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:6px;flex-shrink:0;}
+.f-row{
+  display:flex;align-items:center;gap:0;
+  padding:5px 8px;border-radius:5px;border:1px solid transparent;
+  transition:background .25s,border-color .25s;flex-shrink:0;
+}
+.f-row.active{background:rgba(0,229,255,.06);border-color:rgba(0,229,255,.2);}
+.f-row.active-gold{background:rgba(255,215,0,.06);border-color:rgba(255,215,0,.2);}
+.f-var{font-size:.92rem;font-weight:800;font-family:'Consolas',monospace;min-width:28px;color:var(--gold);}
+.f-eq{font-size:.74rem;color:var(--dim);margin:0 5px;}
+.f-expr{font-size:.74rem;font-family:'Consolas',monospace;color:var(--text);flex:1;line-height:1.4;}
+.f-val{font-size:.72rem;font-family:'Consolas',monospace;min-width:130px;text-align:right;color:var(--cyan);font-weight:700;transition:color .3s;}
+.f-val.updating{color:var(--gold);}
+.f-div{height:1px;background:var(--border);margin:4px 0;flex-shrink:0;}
+.fp-note{font-size:.6rem;color:var(--dim);font-style:italic;padding:3px 8px;flex-shrink:0;}
+
+/* Memory comparison bars */
+.mem-bars{flex-shrink:0;margin-top:auto;padding-top:8px;display:flex;flex-direction:column;gap:4px;}
+.mb-lbl-row{font-size:.58rem;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);margin-bottom:2px;}
+.mb-row{display:flex;align-items:center;gap:6px;font-size:.66rem;}
+.mb-name{width:120px;color:var(--dim);flex-shrink:0;}
+.mb-track{flex:1;height:7px;border-radius:999px;background:rgba(255,255,255,.04);border:1px solid var(--border);overflow:hidden;}
+.mb-fill{height:100%;border-radius:999px;}
+.mb-v{width:50px;text-align:right;font-weight:700;font-size:.65rem;}
+
+/* Status */
+#status-box{
+  flex-shrink:0;display:flex;align-items:center;gap:8px;
+  background:var(--panel);border:1.5px solid var(--border);border-radius:var(--r);padding:7px 12px;
+}
+.sdot{width:8px;height:8px;border-radius:50%;flex-shrink:0;transition:all .3s;}
+.sdot.idle{background:var(--dim);}
+.sdot.active{background:var(--gold);box-shadow:0 0 8px rgba(255,215,0,.6);animation:sp .9s ease-in-out infinite;}
+.sdot.done{background:var(--green);box-shadow:0 0 8px rgba(0,232,112,.6);}
+@keyframes sp{0%,100%{opacity:1;}50%{opacity:.25;}}
+#status-text{font-size:.76rem;font-weight:600;line-height:1.4;color:var(--text);}
+
+/* ── CONTROLS ─────────────────────────────── */
+#controls{
+  flex-shrink:0;height:48px;display:flex;align-items:center;gap:9px;
+  padding:0 14px;background:var(--panel);border-top:1.5px solid var(--border);
+}
+button{
+  cursor:pointer;border:1.5px solid var(--cyan);border-radius:6px;
+  background:rgba(0,229,255,.06);color:var(--cyan);font-size:.72rem;font-weight:700;
+  letter-spacing:.04em;text-transform:uppercase;padding:6px 14px;transition:all .18s;white-space:nowrap;
+}
+button:hover{background:rgba(0,229,255,.18);}
+#btn-step{border-color:var(--gold);color:var(--gold);background:rgba(255,215,0,.06);}
+#btn-step:hover{background:rgba(255,215,0,.18);}
+#btn-reset{border-color:var(--mag);color:var(--mag);background:rgba(255,0,204,.06);}
+#btn-reset:hover{background:rgba(255,0,204,.18);}
+.csep{width:1px;height:26px;background:var(--border);}
+.clbl{font-size:.6rem;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;white-space:nowrap;}
+#speed-range{-webkit-appearance:none;appearance:none;height:3px;border-radius:999px;
+  background:linear-gradient(90deg,var(--cyan),var(--border));width:80px;cursor:pointer;}
+#speed-range::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;
+  border-radius:50%;background:var(--cyan);border:2px solid var(--bg);cursor:pointer;}
+#ctrl-info{margin-left:auto;font-size:.65rem;color:var(--dim);white-space:nowrap;}
+#ctrl-info b{color:var(--cyan);}
+</style>
+</head>
+<body>
+
+<!-- ── HEADER ──────────────────────────────── -->
+<div id="hdr">
+  <div class="title-block">
+    <h1>&#x26A1; Flash Attention &mdash; Tiling &amp; Online Softmax</h1>
+    <p>N = 10 tokens &nbsp;&middot;&nbsp; Tile = 5&times;5 &nbsp;&middot;&nbsp; 4 Tiles &nbsp;&middot;&nbsp; No full N&sup2; matrix in HBM</p>
+  </div>
+  <div class="mem-cards">
+    <div class="mcard bad">
+      <div class="mcard-icon">
+        <svg width="34" height="34" viewBox="0 0 34 34">
+          <rect x="0" y="0" width="34" height="34" rx="3" fill="rgba(255,68,85,0.12)" stroke="rgba(255,68,85,0.5)" stroke-width="1.5"/>
+          <line x1="8.5" y1="0" x2="8.5" y2="34" stroke="rgba(255,68,85,0.25)" stroke-width=".7"/>
+          <line x1="17" y1="0" x2="17" y2="34" stroke="rgba(255,68,85,0.25)" stroke-width=".7"/>
+          <line x1="25.5" y1="0" x2="25.5" y2="34" stroke="rgba(255,68,85,0.25)" stroke-width=".7"/>
+          <line x1="0" y1="8.5" x2="34" y2="8.5" stroke="rgba(255,68,85,0.25)" stroke-width=".7"/>
+          <line x1="0" y1="17" x2="34" y2="17" stroke="rgba(255,68,85,0.25)" stroke-width=".7"/>
+          <line x1="0" y1="25.5" x2="34" y2="25.5" stroke="rgba(255,68,85,0.25)" stroke-width=".7"/>
+        </svg>
+      </div>
+      <div class="mcard-text">
+        <div class="mn">Standard Attention</div>
+        <div class="mv">100 values in HBM</div>
+        <div class="ms">N&sup2; = 10&sup2; &mdash; full matrix materialised</div>
+      </div>
+    </div>
+    <div class="mcard good">
+      <div class="mcard-icon">
+        <svg width="34" height="34" viewBox="0 0 34 34">
+          <rect x="5" y="5" width="24" height="24" rx="3" fill="rgba(0,229,255,0.15)" stroke="#00e5ff" stroke-width="1.5"/>
+          <rect x="5" y="5" width="24" height="24" rx="3" fill="none" stroke="rgba(0,229,255,0.35)" stroke-width="5" filter="url(#gf2)"/>
+          <defs><filter id="gf2"><feGaussianBlur stdDeviation="2"/></filter></defs>
+          <line x1="17" y1="5" x2="17" y2="29" stroke="rgba(0,229,255,0.25)" stroke-width=".8"/>
+          <line x1="5" y1="17" x2="29" y2="17" stroke="rgba(0,229,255,0.25)" stroke-width=".8"/>
+        </svg>
+      </div>
+      <div class="mcard-text">
+        <div class="mn">Flash Attention</div>
+        <div class="mv">25 values in SRAM</div>
+        <div class="ms">Tile&sup2; = 5&sup2; &mdash; 75% less peak memory</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── MAIN ────────────────────────────────── -->
+<div id="main">
+
+  <!-- Left: canvas + tile dots -->
+  <div id="canvas-area">
+    <div id="cv-outer">
+      <canvas id="cv"></canvas>
+    </div>
+    <div id="tile-grid">
+      <div class="td"><div class="td-box" id="dot-0">T1</div><div class="td-lbl">Q&#x2081;&times;K&#x2081;<sup>T</sup></div></div>
+      <div class="td"><div class="td-box" id="dot-1">T2</div><div class="td-lbl">Q&#x2081;&times;K&#x2082;<sup>T</sup></div></div>
+      <div class="td"><div class="td-box" id="dot-2">T3</div><div class="td-lbl">Q&#x2082;&times;K&#x2081;<sup>T</sup></div></div>
+      <div class="td"><div class="td-box" id="dot-3">T4</div><div class="td-lbl">Q&#x2082;&times;K&#x2082;<sup>T</sup></div></div>
+    </div>
+  </div>
+
+  <!-- Right panel -->
+  <div id="right">
+
+    <!-- Tile header -->
+    <div id="tile-hdr">
+      <div class="th-left">
+        <div class="th-title" id="th-title">Ready to Start</div>
+        <div class="th-sub" id="th-sub">Press Play or Step to begin Flash Attention tiling</div>
+      </div>
+      <div class="th-right">
+        <div id="step-badge">Step 0 / 16</div>
+        <div class="th-substep" id="th-sub2">&mdash;</div>
+      </div>
+    </div>
+
+    <!-- Formula panel -->
+    <div id="formula-panel">
+      <div class="fp-lbl">Online Softmax &mdash; Per-Tile Update Equations</div>
+
+      <div class="f-row" id="fr-s">
+        <span class="f-var">S</span>
+        <span class="f-eq">=</span>
+        <span class="f-expr">Q<sub>i</sub> &times; K<sub>j</sub><sup>T</sup> / &radic;d &nbsp;&nbsp; &larr; 5&times;5 score block</span>
+        <span class="f-val" id="fv-s">&mdash;</span>
+      </div>
+
+      <div class="f-div"></div>
+
+      <div class="f-row" id="fr-m">
+        <span class="f-var">m</span>
+        <span class="f-eq">=</span>
+        <span class="f-expr">max( m<sub>prev</sub>, &nbsp;rowmax(S) ) &nbsp;&nbsp; &larr; running max</span>
+        <span class="f-val" id="fv-m">&mdash;</span>
+      </div>
+
+      <div class="f-row" id="fr-l">
+        <span class="f-var">l</span>
+        <span class="f-eq">=</span>
+        <span class="f-expr">l<sub>prev</sub> &middot; e<sup>m<sub>prev</sub>&minus;m</sup> &nbsp;+&nbsp; rowsum( e<sup>S&minus;m</sup> )</span>
+        <span class="f-val" id="fv-l">&mdash;</span>
+      </div>
+
+      <div class="f-div"></div>
+
+      <div class="f-row" id="fr-o">
+        <span class="f-var">O</span>
+        <span class="f-eq">=</span>
+        <span class="f-expr">diag(e<sup>m<sub>prev</sub>&minus;m</sup>) &middot; O<sub>prev</sub> &nbsp;+&nbsp; e<sup>S&minus;m</sup> &middot; V<sub>j</sub></span>
+        <span class="f-val" id="fv-o">&mdash;</span>
+      </div>
+
+      <div class="f-div"></div>
+
+      <div class="fp-note">
+        &#x2714; Online Softmax: the N&times;N attention matrix is <strong>never written to HBM</strong>.
+        Each tile updates (m,&thinsp;l,&thinsp;O) in-place inside SRAM and discards S immediately.
+      </div>
+
+      <!-- Memory bars pushed to bottom -->
+      <div class="mem-bars">
+        <div class="mb-lbl-row">Peak Memory Comparison (this sequence)</div>
+        <div class="mb-row">
+          <div class="mb-name">Standard (N&sup2;=100)</div>
+          <div class="mb-track"><div class="mb-fill" style="width:100%;background:rgba(255,68,85,0.7);"></div></div>
+          <div class="mb-v" style="color:#ff6677;">100 vals</div>
+        </div>
+        <div class="mb-row">
+          <div class="mb-name">Flash (tile=25)</div>
+          <div class="mb-track"><div class="mb-fill" style="width:25%;background:var(--cyan);box-shadow:0 0 5px rgba(0,229,255,0.5);"></div></div>
+          <div class="mb-v" style="color:var(--cyan);">25 vals</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Status -->
+    <div id="status-box">
+      <div class="sdot idle" id="sdot"></div>
+      <div id="status-text">Press <strong style="color:var(--cyan)">Play</strong> or <strong style="color:var(--gold)">Step</strong> to begin the tiling walkthrough.</div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── CONTROLS ─────────────────────────────── -->
+<div id="controls">
+  <button id="btn-play">&#9654; Play</button>
+  <button id="btn-step">&#x23E9; Step</button>
+  <button id="btn-reset">&#x21BA; Reset</button>
+  <div class="csep"></div>
+  <span class="clbl">Speed:</span>
+  <input type="range" id="speed-range" min="1" max="5" value="2"/>
+  <div class="csep"></div>
+  <div id="ctrl-info">Tile: <b id="ci-t">&mdash;</b> &nbsp;|&nbsp; Sub-step: <b id="ci-s">&mdash;</b></div>
+</div>
+
+<script>
+'use strict';
+
+/* ═══ Constants ═════════════════════════════ */
+const N=10, TS=5, TPR=2;          // sequence, tile size, tiles-per-row
+const CSZ=464, MAR=18;            // canvas size, margin
+const CELL=(CSZ-2*MAR)/N;         // cell size = 42.8 → floats OK
+const GSIZ=CELL*N;                // grid size
+
+/* ═══ Canvas ════════════════════════════════ */
+const cv=document.getElementById('cv');
+const ctx=cv.getContext('2d');
+const dpr=window.devicePixelRatio||1;
+cv.width=CSZ*dpr; cv.height=CSZ*dpr;
+cv.style.width=CSZ+'px'; cv.style.height=CSZ+'px';
+ctx.scale(dpr,dpr);
+
+/* ═══ Seeded RNG ════════════════════════════ */
+let _s=0xdeadbeef;
+function sr(){_s^=_s<<13;_s^=_s>>17;_s^=_s<<5;return((_s>>>0)/4294967296);}
+
+/* ═══ Attention matrix (N×N, softmax rows) ═ */
+const rawM=Array.from({length:N},()=>Array.from({length:N},()=>sr()-0.45));
+const attn=rawM.map(row=>{
+  const mx=Math.max(...row);
+  const e=row.map(v=>Math.exp(v-mx));
+  const s=e.reduce((a,b)=>a+b,0);
+  return e.map(v=>v/s);
+});
+
+/* ═══ Tile definitions ══════════════════════ */
+const TDEFS=[
+  {tr:0,tc:0,label:'Tile 1  (Top-Left)',    qi:'Q\u2081',ki:'K\u2081'},
+  {tr:0,tc:1,label:'Tile 2  (Top-Right)',   qi:'Q\u2081',ki:'K\u2082'},
+  {tr:1,tc:0,label:'Tile 3  (Bottom-Left)', qi:'Q\u2082',ki:'K\u2081'},
+  {tr:1,tc:1,label:'Tile 4  (Bottom-Right)',qi:'Q\u2082',ki:'K\u2082'},
+];
+
+/* ═══ Simulated live statistics ════════════ */
+const SIM=[
+  {mprev:'\u2212\u221E',mnew:'0.824',lprev:'0.000',lnew:'2.341'},
+  {mprev:'0.824',      mnew:'1.137',lprev:'2.341',lnew:'4.892'},
+  {mprev:'1.137',      mnew:'1.137',lprev:'4.892',lnew:'6.714'},
+  {mprev:'1.137',      mnew:'1.312',lprev:'6.714',lnew:'9.231'},
+];
+
+/* ═══ Status messages [tile][sub] ══════════ */
+const STATUS=[
+  ['Loading Q\u2081, K\u2081 into SRAM \u2014 first tile, initialise m=\u2212\u221E, l=0\u2026',
+   'Computing S = Q\u2081 \u00D7 K\u2081\u1D40 / \u221Ad (5\u00D75 score block)\u2026',
+   'Online Softmax: init m = rowmax(S), l = rowsum(e^(S\u2212m))\u2026',
+   'Output O\u2081 = e^(S\u2212m) \u00D7 V\u2081  \u2014  first accumulation done \u2714'],
+  ['Moving right \u2192 reusing Q\u2081 in SRAM, loading K\u2082\u2026',
+   'Computing S = Q\u2081 \u00D7 K\u2082\u1D40 / \u221Ad (5\u00D75 score block)\u2026',
+   'Updating m = max(m, rowmax(S)), rescaling l\u2026',
+   'Rescaling O with e^(m_prev\u2212m), accumulating e^(S\u2212m)\u00D7V\u2082 \u2714'],
+  ['Moving down \u2193 loading Q\u2082 and K\u2081 into SRAM\u2026',
+   'Computing S = Q\u2082 \u00D7 K\u2081\u1D40 / \u221Ad (5\u00D75 score block)\u2026',
+   'm unchanged \u2014 only l grows with new row sums\u2026',
+   'Output O\u2082 = e^(S\u2212m) \u00D7 V\u2081  \u2014  bottom-left done \u2714'],
+  ['Final tile \u2014 loading Q\u2082, K\u2082 into SRAM\u2026',
+   'Computing S = Q\u2082 \u00D7 K\u2082\u1D40 / \u221Ad  \u2014  last 5\u00D75 block\u2026',
+   'Final Online Softmax update: m \u2191, l rescaled\u2026',
+   'Final O\u2082: rescale + accumulate \u2014 attention complete! \u2714'],
+];
+
+/* ═══ State ═════════════════════════════════ */
+let step=-1, paused=true, timer=null, speedMs=1100;
+
+function getTile(s){
+  if(s<0||s>=16)return{tile:-1,sub:-1};
+  return{tile:Math.floor(s/4),sub:s%4};
+}
+
+/* ═══ Colour map ════════════════════════════ */
+function scoreCol(v,alpha){
+  const stops=[[0,[3,8,45]],[0.12,[0,40,120]],[0.25,[0,100,190]],
+               [0.45,[0,195,175]],[0.65,[100,215,60]],[0.82,[230,175,0]],[1,[255,70,70]]];
+  let s=0;while(s<stops.length-2&&v>stops[s+1][0])s++;
+  const [t0,c0]=stops[s],[t1,c1]=stops[s+1],f=(v-t0)/(t1-t0);
+  const r=Math.round(c0[0]+f*(c1[0]-c0[0]));
+  const g=Math.round(c0[1]+f*(c1[1]-c0[1]));
+  const b=Math.round(c0[2]+f*(c1[2]-c0[2]));
+  return`rgba(${r},${g},${b},${alpha})`;
+}
+
+/* ═══ Draw ══════════════════════════════════ */
+function draw(){
+  ctx.fillStyle='#060a12';
+  ctx.fillRect(0,0,CSZ,CSZ);
+
+  const{tile,sub}=getTile(step);
+  const done=step>=16;
+  const idle=step<0;
+  const pulse=0.35+0.65*Math.abs(Math.sin(Date.now()/380));
+
+  /* ── HBM label ──────────────────────── */
+  ctx.save();
+  ctx.globalAlpha=0.18;
+  ctx.fillStyle='#1a3050';
+  ctx.font=`bold 36px monospace`;
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText('HBM',CSZ/2,CSZ/2);
+  ctx.restore();
+
+  /* ── Token index labels ─────────────── */
+  ctx.fillStyle='#2a4060';
+  ctx.font=`${Math.round(CELL*0.33)}px monospace`;
+  for(let i=0;i<N;i++){
+    ctx.textAlign='right';ctx.textBaseline='middle';
+    ctx.fillText(i,MAR-3,MAR+i*CELL+CELL/2);
+    ctx.textAlign='center';ctx.textBaseline='bottom';
+    ctx.fillText(i,MAR+i*CELL+CELL/2,MAR-4);
+  }
+
+  /* ── Cells ──────────────────────────── */
+  for(let i=0;i<N;i++){
+    for(let j=0;j<N;j++){
+      const x=MAR+j*CELL, y=MAR+i*CELL;
+      const tileRow=Math.floor(i/TS), tileCol=Math.floor(j/TS);
+      const tIdx=tileRow*TPR+tileCol;
+      const sc=attn[i][j];
+
+      let alpha=0.18;
+      if(done){alpha=1;}
+      else if(tile>=0){
+        if(tIdx<tile)alpha=0.72;
+        else if(tIdx===tile)alpha=(sub>=1?1.0:0.45);
+      }
+
+      /* Cell fill */
+      ctx.fillStyle=scoreCol(sc,alpha);
+      ctx.fillRect(x+1,y+1,CELL-2,CELL-2);
+
+      /* Active tile shimmer */
+      if(!done&&tIdx===tile&&sub>=1){
+        ctx.fillStyle=`rgba(255,215,0,${0.07*pulse})`;
+        ctx.fillRect(x+1,y+1,CELL-2,CELL-2);
+      }
+      /* Done tile subtle tint */
+      if(!done&&tIdx<tile){
+        ctx.fillStyle='rgba(0,232,112,0.04)';
+        ctx.fillRect(x+1,y+1,CELL-2,CELL-2);
+      }
+
+      /* Score text */
+      if(alpha>0.38&&CELL>=30){
+        const bright=alpha>0.7;
+        ctx.fillStyle=bright?(sc>0.1?'rgba(0,0,0,0.85)':'rgba(180,210,240,0.7)'):'rgba(60,100,140,0.7)';
+        ctx.font=`bold ${Math.round(CELL*0.27)}px Consolas,monospace`;
+        ctx.textAlign='center';ctx.textBaseline='middle';
+        ctx.fillText(sc.toFixed(2),x+CELL/2,y+CELL/2);
+      }
+    }
+  }
+
+  /* ── Grid lines ─────────────────────── */
+  ctx.strokeStyle='rgba(255,255,255,0.055)';ctx.lineWidth=0.5;
+  for(let i=0;i<=N;i++){
+    ctx.beginPath();ctx.moveTo(MAR+i*CELL,MAR);ctx.lineTo(MAR+i*CELL,MAR+GSIZ);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(MAR,MAR+i*CELL);ctx.lineTo(MAR+GSIZ,MAR+i*CELL);ctx.stroke();
+  }
+
+  /* ── Tile separator lines ───────────── */
+  const sep=MAR+TS*CELL;
+  ctx.save();
+  ctx.strokeStyle='rgba(180,200,255,0.28)';ctx.lineWidth=2;
+  ctx.setLineDash([5,3]);
+  ctx.beginPath();ctx.moveTo(sep,MAR);ctx.lineTo(sep,MAR+GSIZ);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(MAR,sep);ctx.lineTo(MAR+GSIZ,sep);ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  /* ── Completed tile green corner ─────── */
+  if(!done&&tile>0){
+    for(let t=0;t<tile;t++){
+      const td=TDEFS[t];
+      const tx2=MAR+td.tc*TS*CELL, ty2=MAR+td.tr*TS*CELL;
+      ctx.strokeStyle='rgba(0,232,112,0.45)';ctx.lineWidth=2;
+      ctx.strokeRect(tx2+1,ty2+1,TS*CELL-2,TS*CELL-2);
+      /* Checkmark */
+      ctx.fillStyle='rgba(0,232,112,0.8)';
+      ctx.font='bold 11px monospace';ctx.textAlign='left';ctx.textBaseline='top';
+      ctx.fillText('\u2714',tx2+4,ty2+3);
+    }
+  }
+
+  /* ── Active tile: glow border + SRAM badge ── */
+  if(!done&&tile>=0){
+    const td=TDEFS[tile];
+    const tx2=MAR+td.tc*TS*CELL, ty2=MAR+td.tr*TS*CELL, ts=TS*CELL;
+    const ga=0.4+0.6*pulse;
+
+    /* Outer glow */
+    ctx.shadowColor='rgba(255,215,0,0.6)';ctx.shadowBlur=12;
+    ctx.strokeStyle=`rgba(255,215,0,${ga})`;ctx.lineWidth=3;
+    ctx.strokeRect(tx2+2,ty2+2,ts-4,ts-4);
+    ctx.shadowBlur=0;
+
+    /* Inner glow ring */
+    ctx.strokeStyle=`rgba(255,215,0,${ga*0.35})`;ctx.lineWidth=8;
+    ctx.strokeRect(tx2+5,ty2+5,ts-10,ts-10);
+
+    /* SRAM badge (top-left corner of tile) */
+    const bx=tx2+4, by=ty2+4, bw=78, bh=19;
+    ctx.fillStyle='rgba(4,8,18,0.88)';
+    ctx.beginPath();ctx.roundRect(bx,by,bw,bh,3);ctx.fill();
+    ctx.strokeStyle=`rgba(255,215,0,${0.7+0.3*pulse})`;ctx.lineWidth=1;
+    ctx.beginPath();ctx.roundRect(bx,by,bw,bh,3);ctx.stroke();
+    ctx.fillStyle=`rgba(255,215,0,${0.85+0.15*pulse})`;
+    ctx.font='bold 10px monospace';ctx.textAlign='left';ctx.textBaseline='middle';
+    ctx.fillText('\u25B6 SRAM',bx+6,by+bh/2+0.5);
+  }
+
+  /* ── HBM outer boundary ─────────────── */
+  ctx.strokeStyle='rgba(58,90,122,0.45)';ctx.lineWidth=1.5;
+  ctx.strokeRect(MAR,MAR,GSIZ,GSIZ);
+
+  /* ── HBM bottom label ───────────────── */
+  ctx.fillStyle='rgba(58,90,122,0.55)';
+  ctx.font='9px monospace';ctx.textAlign='left';ctx.textBaseline='top';
+  ctx.fillText('HBM (High Bandwidth Memory)',MAR,MAR+GSIZ+3);
+
+  /* ── All-done overlay ───────────────── */
+  if(done){
+    ctx.fillStyle='rgba(6,10,18,0.78)';
+    ctx.fillRect(MAR,MAR+GSIZ/2-30,GSIZ,60);
+    ctx.fillStyle='#00e870';
+    ctx.font='bold 14px "Segoe UI",sans-serif';
+    ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText('\u2705  Full Attention Computed!',MAR+GSIZ/2,MAR+GSIZ/2-10);
+    ctx.fillStyle='#00e5ff';
+    ctx.font='11px "Segoe UI",sans-serif';
+    ctx.fillText('75% less peak memory  \u2014  O(N) instead of O(N\u00B2)',MAR+GSIZ/2,MAR+GSIZ/2+11);
+  }
+}
+
+/* ═══ UI Update ══════════════════════════════ */
+const elTitle=document.getElementById('th-title');
+const elSub=document.getElementById('th-sub');
+const elSub2=document.getElementById('th-sub2');
+const elStepB=document.getElementById('step-badge');
+const elStatus=document.getElementById('status-text');
+const elSdot=document.getElementById('sdot');
+const elCiT=document.getElementById('ci-t');
+const elCiS=document.getElementById('ci-s');
+const dots=[0,1,2,3].map(i=>document.getElementById('dot-'+i));
+const fRows=['fr-s','fr-m','fr-l','fr-o'].map(id=>document.getElementById(id));
+const fVals=['fv-s','fv-m','fv-l','fv-o'].map(id=>document.getElementById(id));
+
+const SUB_LABELS=['Load','Score','Softmax','Output'];
+const ACTIVE_MAP={0:[0],1:[0],2:[1,2],3:[3]};
+
+function updateUI(){
+  const{tile,sub}=getTile(step);
+  const done=step>=16, idle=step<0;
+  const shown=Math.max(0,Math.min(step,16));
+
+  elStepB.textContent='Step '+shown+' / 16';
+
+  /* Title */
+  if(done){
+    elTitle.textContent='\u2705  Complete!';elTitle.style.color='#00e870';
+    elSub.textContent='All 4 tiles processed \u2014 exact attention with O(N) peak memory';
+    elSub2.textContent='';elCiT.textContent='4/4';elCiS.textContent='Done';
+  }else if(idle){
+    elTitle.textContent='Ready to Start';elTitle.style.color='#ffd700';
+    elSub.textContent='Press Play or Step to begin the tiling walkthrough';
+    elSub2.textContent='';elCiT.textContent='\u2014';elCiS.textContent='\u2014';
+  }else{
+    const td=TDEFS[tile];
+    elTitle.textContent=td.label+'  ('+( tile+1)+' / 4)';elTitle.style.color='#ffd700';
+    elSub.textContent='Processing '+td.qi+' \u00D7 '+td.ki+'\u1D40  \u00B7  Sub-step '+(sub+1)+'/4';
+    elSub2.textContent=SUB_LABELS[sub]+' phase';
+    elCiT.textContent=(tile+1)+'/4';elCiS.textContent=SUB_LABELS[sub];
+  }
+
+  /* Tile dots */
+  dots.forEach((d,i)=>{
+    d.classList.remove('active','done');
+    if(done)d.classList.add('done');
+    else if(i<tile)d.classList.add('done');
+    else if(i===tile&&!done)d.classList.add('active');
+  });
+
+  /* Formula rows */
+  fRows.forEach(r=>{r.classList.remove('active','active-gold');});
+  if(!idle&&!done){
+    (ACTIVE_MAP[sub]||[]).forEach(i=>{fRows[i].classList.add('active');});
+  }
+
+  /* Formula values */
+  if(idle){
+    fVals.forEach(v=>{v.textContent='\u2014';v.classList.remove('updating');});
+  }else if(done){
+    fVals[0].textContent='5\u00D75 \u2714';
+    fVals[1].textContent='m = 1.312';
+    fVals[2].textContent='l = 9.231';
+    fVals[3].textContent='O = final \u2714';
+    fVals.forEach(v=>v.classList.remove('updating'));
+  }else{
+    const sim=SIM[tile]||SIM[0];
+    if(sub===0){
+      fVals[0].textContent='loading\u2026';fVals[0].classList.add('updating');
+      fVals[1].textContent=sim.mprev;
+      fVals[2].textContent=sim.lprev;
+      fVals[3].textContent='\u2014';
+    }else if(sub===1){
+      fVals[0].textContent='5\u00D75 \u2714';fVals[0].classList.remove('updating');
+      fVals[1].textContent=sim.mprev+' (prev)';
+      fVals[2].textContent=sim.lprev+' (prev)';
+      fVals[3].textContent='pending\u2026';
+    }else if(sub===2){
+      fVals[0].textContent='5\u00D75 \u2714';
+      fVals[1].textContent=sim.mprev+' \u2192 '+sim.mnew;fVals[1].classList.add('updating');
+      fVals[2].textContent=sim.lprev+' \u2192 '+sim.lnew;fVals[2].classList.add('updating');
+      fVals[3].textContent='pending\u2026';
+    }else{
+      fVals[0].textContent='5\u00D75 \u2714';
+      fVals[1].textContent='m = '+sim.mnew;fVals[1].classList.remove('updating');
+      fVals[2].textContent='l = '+sim.lnew;fVals[2].classList.remove('updating');
+      fVals[3].textContent='accumulating\u2026';fVals[3].classList.add('updating');
+    }
+  }
+
+  /* Status */
+  elStatus.textContent=done
+    ?'\u2705 Full Attention Computed! 4 tiles processed \u2014 75% less peak memory than Standard Attention.'
+    :idle?'Press Play or Step to begin.'
+    :STATUS[tile][sub];
+  elSdot.className='sdot '+(done?'done':idle?'idle':'active');
+}
+
+/* ═══ Render loop ════════════════════════════ */
+function renderLoop(){draw();requestAnimationFrame(renderLoop);}
+
+/* ═══ Step advance ═══════════════════════════ */
+function advance(){
+  if(paused)return;
+  step++;
+  if(step>16){step=16;paused=true;document.getElementById('btn-play').innerHTML='&#9654; Play';}
+  updateUI();
+  if(!paused&&step<16)timer=setTimeout(advance,speedMs);
+}
+
+/* ═══ Controls ═══════════════════════════════ */
+const btnPlay=document.getElementById('btn-play');
+btnPlay.addEventListener('click',()=>{
+  if(step>=16){step=-1;updateUI();}
+  paused=!paused;
+  btnPlay.innerHTML=paused?'&#9654; Play':'&#9646;&#9646; Pause';
+  if(!paused){clearTimeout(timer);advance();}else clearTimeout(timer);
+});
+document.getElementById('btn-step').addEventListener('click',()=>{
+  clearTimeout(timer);paused=true;btnPlay.innerHTML='&#9654; Play';
+  if(step>=16){step=-1;updateUI();return;}
+  step++;if(step>16)step=16;updateUI();
+});
+document.getElementById('btn-reset').addEventListener('click',()=>{
+  clearTimeout(timer);paused=true;step=-1;
+  btnPlay.innerHTML='&#9654; Play';
+  fVals.forEach(v=>v.classList.remove('updating'));
+  updateUI();
+});
+document.getElementById('speed-range').addEventListener('input',function(){
+  speedMs=[2200,1100,600,300,100][parseInt(this.value)-1];
+});
+
+/* ═══ Boot ═══════════════════════════════════ */
+updateUI();
+renderLoop();
+</script>
+</body>
+</html>

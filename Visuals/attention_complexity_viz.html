@@ -1,0 +1,791 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>16x16 Attention Grid</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:     #060a12;
+    --panel:  #0c1828;
+    --border: #1a3050;
+    --cyan:   #00e5ff;
+    --orange: #ff8c00;
+    --gold:   #ffd700;
+    --red:    #ff3344;
+    --green:  #00e870;
+    --text:   #9ab8d4;
+    --dim:    #3a5a7a;
+  }
+
+  html, body {
+    width: 100%; height: 100vh;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Header ── */
+  #hdr {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 18px;
+    height: 48px;
+    background: var(--panel);
+    border-bottom: 1.5px solid var(--border);
+  }
+  #hdr h1 {
+    font-size: 1.05rem;
+    font-weight: 800;
+    background: linear-gradient(90deg, var(--cyan), var(--orange));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+  #hdr .tag {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--dim);
+  }
+  #badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    padding: 4px 12px;
+    border-radius: 999px;
+    border: 1.5px solid var(--cyan);
+    color: var(--cyan);
+    background: rgba(0,229,255,0.06);
+    white-space: nowrap;
+    transition: all 0.3s;
+  }
+  #badge.hot {
+    border-color: var(--green);
+    color: var(--green);
+    background: rgba(0,232,112,0.08);
+    box-shadow: 0 0 14px rgba(0,232,112,0.4);
+  }
+
+  /* ── Main ── */
+  #main {
+    flex: 1;
+    display: flex;
+    gap: 14px;
+    padding: 12px 16px;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* ── Left: canvas ── */
+  #left {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+  .strip-label {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+  }
+  .strip-label.q { color: var(--cyan); }
+  .strip-label.k { color: var(--orange); }
+  #cv-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  #q-label-vert {
+    writing-mode: vertical-rl;
+    text-orientation: mixed;
+    transform: rotate(180deg);
+    font-size: 0.62rem;
+    font-weight: 700;
+    color: var(--cyan);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    align-self: stretch;
+    padding: 4px 0;
+  }
+  #cv-col {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+  }
+  #k-label-horiz {
+    font-size: 0.62rem;
+    font-weight: 700;
+    color: var(--orange);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #cv-box {
+    background: var(--panel);
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    padding: 8px;
+    box-shadow: 0 0 22px rgba(0,229,255,0.07);
+  }
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    border-radius: 4px;
+  }
+
+  /* ── Right: info panel ── */
+  #right {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* Formula */
+  #formula-box {
+    flex-shrink: 0;
+    background: var(--panel);
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 14px;
+  }
+  .box-lbl {
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--dim);
+    margin-bottom: 4px;
+  }
+  #formula {
+    font-size: 0.78rem;
+    font-family: 'Consolas','Courier New',monospace;
+    line-height: 1.5;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Stats 2x2 */
+  #stats {
+    flex-shrink: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+  }
+  .card .lbl {
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--dim);
+    margin-bottom: 2px;
+  }
+  .card .val {
+    font-size: 1.25rem;
+    font-weight: 800;
+    color: var(--cyan);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.2;
+  }
+  .card .sub {
+    font-size: 0.58rem;
+    color: var(--dim);
+    margin-top: 2px;
+  }
+
+  /* Progress */
+  #prog-wrap {
+    flex-shrink: 0;
+    background: var(--panel);
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+  }
+  .prog-header {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--dim);
+    margin-bottom: 6px;
+  }
+  .prog-track {
+    height: 10px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+  #prog-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--cyan), var(--orange));
+    transition: width 0.08s linear;
+  }
+  #prog-fill.done { background: var(--green); box-shadow: 0 0 8px rgba(0,232,112,0.5); }
+
+  /* Scale table */
+  #scale-wrap {
+    flex: 1;
+    background: var(--panel);
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  #scale-wrap .box-lbl { margin-bottom: 6px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.74rem;
+    flex: 1;
+  }
+  th {
+    text-align: left;
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--dim);
+    padding: 0 8px 5px;
+    border-bottom: 1px solid var(--border);
+  }
+  td { padding: 5px 8px; border-bottom: 1px solid rgba(26,48,80,0.4); white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  .r td { text-align: right; }
+  .here td:first-child { color: var(--cyan); font-weight: 700; }
+  .here td { background: rgba(0,229,255,0.04); }
+  .danger td:first-child { color: var(--red); font-weight: 700; }
+  .danger td { background: rgba(255,51,68,0.04); }
+  .bar-wrap { width: 80px; }
+  .mini-bg { background: rgba(255,255,255,0.05); border-radius: 999px; height: 5px; overflow: hidden; }
+  .mini-fill { height: 100%; border-radius: 999px; }
+
+  /* Controls */
+  #controls {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  button {
+    cursor: pointer;
+    border: 1.5px solid var(--cyan);
+    border-radius: 7px;
+    background: rgba(0,229,255,0.06);
+    color: var(--cyan);
+    font-size: 0.74rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 7px 16px;
+    transition: all 0.18s;
+    white-space: nowrap;
+  }
+  button:hover { background: rgba(0,229,255,0.18); }
+  #btn-reset { border-color: var(--orange); color: var(--orange); background: rgba(255,140,0,0.06); }
+  #btn-reset:hover { background: rgba(255,140,0,0.18); }
+  .ctrl-lbl { font-size: 0.65rem; color: var(--dim); text-transform: uppercase; letter-spacing: 0.07em; white-space: nowrap; }
+  select {
+    background: var(--panel);
+    border: 1.5px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 0.72rem;
+    padding: 6px 8px;
+    cursor: pointer;
+  }
+
+  /* ── Footer ── */
+  #ftr {
+    flex-shrink: 0;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.66rem;
+    color: var(--dim);
+    border-top: 1px solid var(--border);
+    padding: 0 16px;
+    text-align: center;
+    letter-spacing: 0.02em;
+  }
+  #ftr strong { color: var(--cyan); }
+</style>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────── -->
+<div id="hdr">
+  <h1>16 &times; 16 Attention Grid &mdash; O(N&sup2;) Embedding Dot Products</h1>
+  <div id="badge">&#x23F3; Computing&hellip;</div>
+  <div class="tag">N = 16 &nbsp;&middot;&nbsp; d = 8 &nbsp;&middot;&nbsp; N&sup2; = 256 cells</div>
+</div>
+
+<!-- ── Main ────────────────────────────────── -->
+<div id="main">
+
+  <!-- Left: canvas -->
+  <div id="left">
+    <div id="cv-row">
+      <div id="q-label-vert">Q &mdash; 16 tokens &times; 8 dims</div>
+      <div id="cv-col">
+        <div id="k-label-horiz">K&sup1; &mdash; 8 dims &times; 16 tokens</div>
+        <div id="cv-box"><canvas id="cv"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right: info panel -->
+  <div id="right">
+
+    <!-- Formula -->
+    <div id="formula-box">
+      <div class="box-lbl">Live computation</div>
+      <div id="formula"><span style="color:#3a5a7a">Starting&hellip;</span></div>
+    </div>
+
+    <!-- Stats -->
+    <div id="stats">
+      <div class="card">
+        <div class="lbl">Cells computed</div>
+        <div class="val"><span id="v-done">0</span> / 256</div>
+        <div class="sub">N&sup2; = 16&sup2; attention scores</div>
+      </div>
+      <div class="card">
+        <div class="lbl">Memory (float32)</div>
+        <div class="val" id="v-mem">1 KB</div>
+        <div class="sub">N&sup2; &times; 4 bytes, 1 head</div>
+      </div>
+      <div class="card">
+        <div class="lbl">FLOPs so far</div>
+        <div class="val"><span id="v-fl">0</span></div>
+        <div class="sub">2 &times; cells &times; d = 16 FLOPs/cell</div>
+      </div>
+      <div class="card">
+        <div class="lbl">vs N = 2048</div>
+        <div class="val" style="color:#ff8c00">16,384&times;</div>
+        <div class="sub">more cells at full LLM length</div>
+      </div>
+    </div>
+
+    <!-- Progress -->
+    <div id="prog-wrap">
+      <div class="prog-header">
+        <span>Attention matrix fill progress</span>
+        <span id="prog-pct">0%</span>
+      </div>
+      <div class="prog-track"><div id="prog-fill"></div></div>
+    </div>
+
+    <!-- Scale table -->
+    <div id="scale-wrap">
+      <div class="box-lbl">O(N&sup2;) scale &mdash; float32, 1 attention head</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Seq Length</th>
+            <th>N&sup2; Cells</th>
+            <th>Memory</th>
+            <th>Multiplier</th>
+            <th class="bar-wrap"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="here">
+            <td>N = 16 &#x1F4CD;</td><td>256</td><td>1 KB</td><td>1&times;</td>
+            <td><div class="mini-bg"><div class="mini-fill" style="width:0.8%;background:#00e5ff"></div></div></td>
+          </tr>
+          <tr>
+            <td>N = 64</td><td>4,096</td><td>16 KB</td><td>16&times;</td>
+            <td><div class="mini-bg"><div class="mini-fill" style="width:1.6%;background:#44bbbb"></div></div></td>
+          </tr>
+          <tr>
+            <td>N = 256</td><td>65,536</td><td>256 KB</td><td>256&times;</td>
+            <td><div class="mini-bg"><div class="mini-fill" style="width:5%;background:#88aa66"></div></div></td>
+          </tr>
+          <tr>
+            <td>N = 512</td><td>262,144</td><td>1 MB</td><td>1,024&times;</td>
+            <td><div class="mini-bg"><div class="mini-fill" style="width:12%;background:#cc8844"></div></div></td>
+          </tr>
+          <tr>
+            <td>N = 1,024</td><td>1,048,576</td><td>4 MB</td><td>4,096&times;</td>
+            <td><div class="mini-bg"><div class="mini-fill" style="width:32%;background:#ff6622"></div></div></td>
+          </tr>
+          <tr class="danger">
+            <td>N = 2,048 &#x1F6A8;</td><td>4,194,304</td><td>16 MB</td><td>16,384&times;</td>
+            <td><div class="mini-bg"><div class="mini-fill" style="width:100%;background:#ff2244"></div></div></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Controls -->
+    <div id="controls">
+      <button id="btn-play">&#9646;&#9646; Pause</button>
+      <button id="btn-reset">&#x21BA; Reset</button>
+      <span class="ctrl-lbl">Speed:</span>
+      <select id="speed-sel">
+        <option value="1">1&times; &mdash; 1 cell / tick</option>
+        <option value="2">2&times;</option>
+        <option value="4">4&times;</option>
+        <option value="16">16&times; &mdash; 1 row / tick</option>
+        <option value="256">Flash &mdash; all at once</option>
+      </select>
+    </div>
+
+  </div><!-- /right -->
+</div><!-- /main -->
+
+<!-- ── Footer ──────────────────────────────── -->
+<div id="ftr">
+  <strong>FlashAttention</strong> never materialises this N&times;N grid &mdash;
+  it computes tiles inside on-chip SRAM (L1 cache) and discards them immediately,
+  keeping peak memory <strong>O(N)</strong> instead of O(N&sup2;).
+</div>
+
+<script>
+'use strict';
+
+/* ── Constants ──────────────────────────────── */
+const N    = 16;
+const DIM  = 8;
+const CELL = 28;   // px per attention cell
+const DSIZ = 7;    // px per embedding dimension in strip
+
+const STRIP = DIM * DSIZ;     // 56
+const GRID  = N * CELL;       // 448
+const CW    = STRIP + GRID;   // 504
+const CH    = STRIP + GRID;   // 504
+
+/* ── Seeded random ──────────────────────────── */
+let _s = 0x9e3779b9;
+function rnd() {
+  _s ^= _s << 13; _s ^= _s >> 17; _s ^= _s << 5;
+  return ((_s >>> 0) / 4294967296);
+}
+
+/* ── Q and K embeddings ─────────────────────── */
+const Q = new Float32Array(N * DIM);
+const K = new Float32Array(N * DIM);
+for (let i = 0; i < N; i++) {
+  const t = i / N;
+  for (let d = 0; d < DIM; d++) {
+    Q[i*DIM+d] = Math.sin(t*(d+1)*Math.PI*2.4)*0.65 + (rnd()-0.5)*0.9;
+    K[i*DIM+d] = Math.cos(t*(d+1)*Math.PI*1.7)*0.65 + (rnd()-0.5)*0.9;
+  }
+}
+
+/* ── Attention scores ───────────────────────── */
+const invSqrtD = 1 / Math.sqrt(DIM);
+const rawS   = new Float32Array(N*N);
+const scores = new Float32Array(N*N);
+
+for (let i = 0; i < N; i++)
+  for (let j = 0; j < N; j++) {
+    let dot = 0;
+    for (let d = 0; d < DIM; d++) dot += Q[i*DIM+d] * K[j*DIM+d];
+    rawS[i*N+j] = dot * invSqrtD;
+  }
+for (let i = 0; i < N; i++) {
+  const b = i*N; let mx = -Infinity;
+  for (let j = 0; j < N; j++) if (rawS[b+j] > mx) mx = rawS[b+j];
+  let sm = 0;
+  for (let j = 0; j < N; j++) { scores[b+j] = Math.exp(rawS[b+j]-mx); sm += scores[b+j]; }
+  for (let j = 0; j < N; j++) scores[b+j] /= sm;
+}
+
+/* ── Colour helpers ─────────────────────────── */
+function scoreColor(v) {
+  const stops = [
+    [0.00,[2,5,55]], [0.15,[0,45,160]], [0.30,[0,150,210]],
+    [0.50,[0,220,150]], [0.70,[140,220,0]], [0.85,[255,140,0]], [1.00,[255,20,20]]
+  ];
+  let s = 0;
+  while (s < stops.length-2 && v > stops[s+1][0]) s++;
+  const [t0,c0]=stops[s],[t1,c1]=stops[s+1], f=(v-t0)/(t1-t0);
+  return [Math.round(c0[0]+f*(c1[0]-c0[0])), Math.round(c0[1]+f*(c1[1]-c0[1])), Math.round(c0[2]+f*(c1[2]-c0[2]))];
+}
+
+function embedColor(val, hue) {
+  const n = Math.max(0, Math.min(1, (val+1.5)/3.0));
+  return `hsl(${hue},82%,${Math.round(12+n*68)}%)`;
+}
+
+/* ── Canvas setup ───────────────────────────── */
+const cv  = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const dpr = window.devicePixelRatio || 1;
+cv.width  = CW * dpr;
+cv.height = CH * dpr;
+cv.style.width  = CW + 'px';
+cv.style.height = CH + 'px';
+ctx.scale(dpr, dpr);
+
+/* ── State ──────────────────────────────────── */
+let cursor = 0, paused = false, timer = null, speed = 1;
+
+/* ── Draw ───────────────────────────────────── */
+function draw() {
+  ctx.fillStyle = '#060a12';
+  ctx.fillRect(0, 0, CW, CH);
+
+  const ci = cursor < N*N ? Math.floor(cursor/N) : -1;
+  const cj = cursor < N*N ? (cursor%N) : -1;
+  const pulse = 0.3 + 0.7 * Math.abs(Math.sin(Date.now()/260));
+
+  /* ─ Q embedding strip (left) ─ */
+  for (let i = 0; i < N; i++) {
+    for (let d = 0; d < DIM; d++) {
+      ctx.fillStyle = embedColor(Q[i*DIM+d], 195);
+      ctx.fillRect(d*DSIZ, STRIP+i*CELL, DSIZ-1, CELL-1);
+    }
+    if (i === ci) {
+      ctx.fillStyle = 'rgba(0,229,255,0.30)';
+      ctx.fillRect(0, STRIP+i*CELL, STRIP, CELL);
+      ctx.fillStyle = '#00e5ff';
+      ctx.fillRect(0, STRIP+i*CELL, 3, CELL-1);
+    }
+    /* Row index label */
+    ctx.fillStyle = '#2a4060';
+    ctx.font = '7px monospace';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(i, STRIP-2, STRIP+i*CELL+CELL/2);
+  }
+
+  /* ─ K^T embedding strip (top) ─ */
+  for (let j = 0; j < N; j++) {
+    for (let d = 0; d < DIM; d++) {
+      ctx.fillStyle = embedColor(K[j*DIM+d], 28);
+      ctx.fillRect(STRIP+j*CELL, d*DSIZ, CELL-1, DSIZ-1);
+    }
+    if (j === cj) {
+      ctx.fillStyle = 'rgba(255,140,0,0.30)';
+      ctx.fillRect(STRIP+j*CELL, 0, CELL, STRIP);
+      ctx.fillStyle = '#ff8c00';
+      ctx.fillRect(STRIP+j*CELL, 0, CELL-1, 3);
+    }
+    /* Column index label */
+    ctx.fillStyle = '#2a4060';
+    ctx.font = '7px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(j, STRIP+j*CELL+CELL/2, STRIP-2);
+  }
+
+  /* ─ Attention cells ─ */
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < N; j++) {
+      const idx = i*N+j;
+      const x = STRIP+j*CELL, y = STRIP+i*CELL, w = CELL-1;
+
+      if (idx < cursor) {
+        const sc = scores[idx];
+        const [r,g,b] = scoreColor(sc);
+        /* Crosshair tint on current row/col */
+        const ri = i===ci, rj = j===cj;
+        const rb = ri ? Math.min(255,r+20) : r;
+        const gb = rj ? Math.min(255,g+20) : g;
+        ctx.fillStyle = `rgb(${rb},${gb},${b})`;
+        ctx.fillRect(x, y, w, w);
+        /* Score text */
+        const bright = sc > 0.07;
+        ctx.fillStyle = bright ? 'rgba(0,0,0,0.88)' : 'rgba(200,220,255,0.6)';
+        ctx.font = `bold ${CELL >= 30 ? '8.5' : '7.5'}px Consolas,monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(sc.toFixed(2), x+CELL/2, y+CELL/2);
+
+      } else if (idx === cursor) {
+        /* Computing pulse */
+        ctx.fillStyle = `rgba(255,255,255,${pulse*0.85})`;
+        ctx.fillRect(x, y, w, w);
+        ctx.fillStyle = 'rgba(0,0,0,0.80)';
+        ctx.font = `bold 8px monospace`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('\u22EF', x+CELL/2, y+CELL/2);
+
+      } else {
+        /* Not computed yet */
+        const faint = (i===ci||j===cj) && cursor>0;
+        ctx.fillStyle = faint ? 'rgba(30,50,80,0.9)' : '#0a1828';
+        ctx.fillRect(x, y, w, w);
+        if (faint) {
+          /* Show dim ghost cross-hair */
+          ctx.fillStyle = i===ci ? 'rgba(0,229,255,0.07)' : 'rgba(255,140,0,0.07)';
+          ctx.fillRect(x, y, w, w);
+        }
+      }
+    }
+  }
+
+  /* ─ Grid lines ─ */
+  ctx.lineWidth = 0.5;
+  ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+  for (let i = 0; i <= N; i++) {
+    ctx.beginPath(); ctx.moveTo(STRIP, STRIP+i*CELL); ctx.lineTo(CW, STRIP+i*CELL); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(STRIP+i*CELL, STRIP); ctx.lineTo(STRIP+i*CELL, CH); ctx.stroke();
+  }
+  ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+  for (let d = 0; d <= DIM; d++) {
+    ctx.beginPath(); ctx.moveTo(d*DSIZ, STRIP); ctx.lineTo(d*DSIZ, CH); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(STRIP, d*DSIZ); ctx.lineTo(CW, d*DSIZ); ctx.stroke();
+  }
+  for (let i = 0; i <= N; i++) {
+    ctx.beginPath(); ctx.moveTo(0, STRIP+i*CELL); ctx.lineTo(STRIP, STRIP+i*CELL); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(STRIP+i*CELL, 0); ctx.lineTo(STRIP+i*CELL, STRIP); ctx.stroke();
+  }
+
+  /* ─ Corner ─ */
+  ctx.fillStyle = '#0c1828';
+  ctx.fillRect(0, 0, STRIP, STRIP);
+  ctx.strokeStyle = '#1a3050'; ctx.lineWidth = 1;
+  ctx.strokeRect(0, 0, STRIP, STRIP);
+  ctx.font = 'bold 10px monospace'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillStyle = '#00e5ff'; ctx.fillText('Q', STRIP/2, STRIP/2-11);
+  ctx.fillStyle = '#2a4060'; ctx.fillText('\u00D7', STRIP/2, STRIP/2);
+  ctx.fillStyle = '#ff8c00'; ctx.fillText('K\u1D40', STRIP/2, STRIP/2+12);
+
+  /* ─ Borders ─ */
+  const done = cursor >= N*N;
+  ctx.strokeStyle = done ? 'rgba(0,232,112,0.55)' : 'rgba(0,229,255,0.2)';
+  ctx.lineWidth = done ? 2 : 1;
+  ctx.strokeRect(STRIP, STRIP, GRID, GRID);
+  ctx.strokeStyle = 'rgba(0,229,255,0.15)'; ctx.lineWidth=1;
+  ctx.strokeRect(0, STRIP, STRIP, GRID);
+  ctx.strokeStyle = 'rgba(255,140,0,0.15)';
+  ctx.strokeRect(STRIP, 0, GRID, STRIP);
+
+  /* ─ Completion overlay ─ */
+  if (done) {
+    ctx.fillStyle = 'rgba(6,10,18,0.70)';
+    ctx.fillRect(STRIP+GRID/2-100, STRIP+GRID/2-18, 200, 36);
+    ctx.fillStyle = '#00e870';
+    ctx.font = 'bold 13px Segoe UI,sans-serif';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('\u2713 All 256 cells done!', STRIP+GRID/2, STRIP+GRID/2);
+  }
+}
+
+/* ── UI update ──────────────────────────────── */
+const elFormula = document.getElementById('formula');
+const elDone    = document.getElementById('v-done');
+const elFl      = document.getElementById('v-fl');
+const elMem     = document.getElementById('v-mem');
+const elPFill   = document.getElementById('prog-fill');
+const elPPct    = document.getElementById('prog-pct');
+const elBadge   = document.getElementById('badge');
+
+function fmtFlops(n) {
+  if (n < 1000) return n.toString();
+  if (n < 1e6)  return (n/1e3).toFixed(1)+'K';
+  return (n/1e6).toFixed(2)+'M';
+}
+
+function updateUI() {
+  const shown = Math.min(cursor, N*N);
+  const pct   = (shown/(N*N)*100);
+  elDone.textContent = shown;
+  elFl.textContent   = fmtFlops(shown * 2 * DIM);
+  elPFill.style.width = pct.toFixed(1)+'%';
+  elPPct.textContent  = pct.toFixed(0)+'%';
+  elPFill.classList.toggle('done', cursor>=N*N);
+
+  const done = cursor >= N*N;
+  elBadge.textContent = done ? '\u2713 Complete!' : (cursor === 0 ? '\u23F3 Ready' : `\u25B6 Cell ${shown}/256`);
+  elBadge.classList.toggle('hot', done);
+
+  if (cursor === 0) {
+    elFormula.innerHTML = '<span style="color:#3a5a7a">Starting \u2014 each cell = Q_i \u00B7 K_j / \u221A8</span>';
+  } else if (shown > 0 && shown <= N*N) {
+    const prev = shown-1;
+    const i = Math.floor(prev/N), j = prev%N;
+    let dot = 0;
+    for (let d=0;d<DIM;d++) dot += Q[i*DIM+d]*K[j*DIM+d];
+    dot *= invSqrtD;
+    let parts = [];
+    for (let d=0;d<3;d++) parts.push(`${Q[i*DIM+d].toFixed(2)}\u00D7${K[j*DIM+d].toFixed(2)}`);
+    elFormula.innerHTML =
+      `A[<span style="color:#00e5ff">${i}</span>][<span style="color:#ff8c00">${j}</span>] = ` +
+      `(${parts.join(' + ')} + \u2026) / \u221A8 = ` +
+      `<span style="color:#ffd700">${dot.toFixed(4)}</span>` +
+      ` \u2192 softmax \u2192 ` +
+      `<span style="color:#ff6060;font-weight:700">${scores[prev].toFixed(4)}</span>`;
+  } else {
+    elFormula.innerHTML = '<span style="color:#00e870;font-weight:700">\u2713 256 attention scores computed. Restarting\u2026</span>';
+  }
+}
+
+/* ── Animation ──────────────────────────────── */
+function advance() {
+  if (paused) return;
+  for (let k=0; k<speed && cursor<N*N; k++) cursor++;
+  updateUI();
+  if (cursor < N*N) timer = setTimeout(advance, 30);
+  else timer = setTimeout(()=>{ cursor=0; if(!paused) advance(); }, 2000);
+}
+
+requestAnimationFrame(function loop() { draw(); requestAnimationFrame(loop); });
+
+/* ── Controls ───────────────────────────────── */
+const btnPlay = document.getElementById('btn-play');
+document.getElementById('btn-reset').addEventListener('click', ()=>{
+  clearTimeout(timer); paused=false; cursor=0;
+  btnPlay.innerHTML='&#9646;&#9646; Pause';
+  updateUI(); timer=setTimeout(advance,400);
+});
+btnPlay.addEventListener('click', ()=>{
+  paused=!paused;
+  btnPlay.innerHTML=paused?'&#9654; Play':'&#9646;&#9646; Pause';
+  if(!paused){clearTimeout(timer);advance();}
+  else clearTimeout(timer);
+});
+document.getElementById('speed-sel').addEventListener('change', function(){
+  speed=parseInt(this.value);
+});
+
+/* ── Boot ───────────────────────────────────── */
+updateUI();
+timer = setTimeout(advance, 700);
+</script>
+</body>
+</html>

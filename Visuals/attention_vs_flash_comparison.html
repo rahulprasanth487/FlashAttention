@@ -1,0 +1,1140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Standard vs Flash Attention: Memory & IO Race</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0a0e14;
+    --panel: #0f141c;
+    --border: #1f2a38;
+    --text: #c8d6e5;
+    --text-dim: #5c6b73;
+    
+    --standard-red: #ff3b5c;
+    --flash-cyan: #00f0ff;
+    --flash-magenta: #b44aff;
+    --green: #00e870;
+    --gold: #ffd700;
+    --font-mono: 'Consolas', 'Fira Code', 'Courier New', monospace;
+  }
+
+  html, body {
+    width: 100%;
+    height: 100vh;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Header */
+  header {
+    height: 64px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 0 24px;
+    flex-shrink: 0;
+  }
+
+  header h1 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    color: #ffffff;
+  }
+
+  header .subtitle {
+    margin: 4px 0 0 0;
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+  }
+
+  /* Main Viewport */
+  main {
+    flex: 1;
+    display: flex;
+    gap: 16px;
+    padding: 16px;
+    min-height: 0;
+  }
+
+  .column {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background-color: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    min-width: 0;
+    min-height: 0;
+    position: relative;
+  }
+
+  .column-header {
+    font-size: 0.78rem;
+    font-weight: 850;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .standard-accent {
+    color: var(--standard-red);
+    text-shadow: 0 0 10px rgba(255, 59, 92, 0.2);
+  }
+
+  .flash-accent {
+    color: var(--flash-cyan);
+    text-shadow: 0 0 10px rgba(0, 240, 255, 0.2);
+  }
+
+  /* Left Column specific layout */
+  .chart-box {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .chart-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+  }
+
+  .chart-header h2 {
+    margin: 0;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #8a9ba8;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .chart-canvas-container {
+    flex: 1;
+    background-color: #111820;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    position: relative;
+    min-height: 120px;
+  }
+
+  #chart-canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  /* GPU execution view styling */
+  .gpu-panel {
+    margin-top: 12px;
+    background-color: #111820;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    height: 128px;
+    flex-shrink: 0;
+  }
+
+  .gpu-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+    flex-shrink: 0;
+  }
+
+  .gpu-title {
+    font-size: 0.68rem;
+    font-weight: 800;
+    color: var(--flash-cyan);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .gpu-tile-status {
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: var(--gold);
+    font-family: var(--font-mono);
+  }
+
+  .gpu-body {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    justify-content: space-between;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .warp-container {
+    flex: 1.2;
+    position: relative;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.01);
+    border-radius: 6px;
+    padding: 6px 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .sram-watermark {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 1.3rem;
+    font-weight: 900;
+    font-family: var(--font-mono);
+    color: rgba(255, 255, 255, 0.015);
+    letter-spacing: 0.1em;
+    pointer-events: none;
+  }
+
+  .warp-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+    margin-bottom: 4px;
+  }
+
+  .warp-box {
+    width: 32px;
+    height: 22px;
+    border-radius: 3px;
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    background: rgba(255, 255, 255, 0.01);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    font-weight: 700;
+    color: var(--text-dim);
+    transition: all 0.12s ease;
+  }
+
+  .warp-box.matmul {
+    border-color: rgba(0, 232, 112, 0.2);
+    background: rgba(0, 232, 112, 0.03);
+    color: var(--green);
+  }
+  .warp-box.matmul.active {
+    background: var(--green);
+    color: #000000;
+    box-shadow: 0 0 8px rgba(0, 232, 112, 0.55);
+  }
+
+  .warp-box.softmax {
+    border-color: rgba(0, 240, 255, 0.2);
+    background: rgba(0, 240, 255, 0.03);
+    color: var(--flash-cyan);
+  }
+  .warp-box.softmax.active {
+    background: var(--flash-cyan);
+    color: #000000;
+    box-shadow: 0 0 8px rgba(0, 240, 255, 0.55);
+  }
+
+  .warp-box.output {
+    border-color: rgba(255, 140, 0, 0.2);
+    background: rgba(255, 140, 0, 0.03);
+    color: #ff8c00;
+  }
+  .warp-box.output.active {
+    background: #ff8c00;
+    color: #000000;
+    box-shadow: 0 0 8px rgba(255, 140, 0, 0.55);
+  }
+
+  .legend-row {
+    display: flex;
+    gap: 8px;
+    font-size: 0.54rem;
+    color: var(--text-dim);
+    font-weight: 600;
+  }
+
+  .legend-row span {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+  }
+
+  .legend-row .dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+
+  .legend-green { background-color: var(--green); }
+  .legend-blue { background-color: var(--flash-cyan); }
+  .legend-orange { background-color: #ff8c00; }
+
+  .parallel-heads-container {
+    flex: 1;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.01);
+    border-radius: 6px;
+    padding: 6px 8px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  .heads-title {
+    font-size: 0.62rem;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+
+  .head-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .head-bar-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+  }
+
+  .head-lbl {
+    font-size: 0.54rem;
+    font-family: var(--font-mono);
+    color: var(--text-dim);
+    width: 32px;
+  }
+
+  .head-bar-track {
+    flex: 1;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 1px;
+    overflow: hidden;
+  }
+
+  .head-bar-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--flash-cyan), var(--flash-magenta));
+    border-radius: 1px;
+  }
+
+  .gpu-caption {
+    font-size: 0.54rem;
+    color: var(--text-dim);
+    font-style: italic;
+    margin-top: 4px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+
+  .chart-footer-stats {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 10px;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--text);
+    flex-shrink: 0;
+  }
+
+  .chart-footer-stats span {
+    font-weight: 700;
+  }
+
+  #hbm-memory-val {
+    color: var(--standard-red);
+  }
+
+  #pairs-val {
+    color: var(--standard-red);
+  }
+
+  /* Right Column specific layout */
+  .stats-box {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .stats-box h2 {
+    margin: 0 0 14px 0;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #8a9ba8;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    flex-shrink: 0;
+  }
+
+  .stats-container {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr 1fr;
+    gap: 12px;
+    min-height: 0;
+  }
+
+  .stat-card {
+    background: rgba(255, 255, 255, 0.015);
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    border-radius: 8px;
+    padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+
+  .saved-card {
+    grid-column: span 2;
+    background: rgba(0, 232, 112, 0.02);
+    border-color: rgba(0, 232, 112, 0.08);
+  }
+
+  .card-lbl {
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+    font-weight: 700;
+  }
+
+  .card-val {
+    font-family: var(--font-mono);
+    font-size: 1.25rem;
+    font-weight: 800;
+    line-height: 1.2;
+  }
+
+  .red-card .card-val {
+    color: var(--standard-red);
+  }
+
+  .cyan-card .card-val {
+    color: var(--flash-cyan);
+  }
+
+  .green-card .card-val {
+    color: var(--green);
+    font-size: 1.6rem;
+    text-shadow: 0 0 10px rgba(0, 232, 112, 0.25);
+  }
+
+  .card-sub {
+    font-size: 0.56rem;
+    color: var(--text-dim);
+    margin-top: 2px;
+  }
+
+  .winner-badge {
+    margin-top: 12px;
+    padding: 8px;
+    border-radius: 6px;
+    background: rgba(0, 240, 255, 0.04);
+    border: 1px solid rgba(0, 240, 255, 0.15);
+    color: var(--flash-cyan);
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-align: center;
+    opacity: 0;
+    transform: translateY(5px);
+    transition: all 0.4s ease;
+    flex-shrink: 0;
+  }
+
+  .winner-badge.show {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* Footer styling */
+  footer {
+    height: 48px;
+    background-color: var(--panel);
+    border-top: 1px solid var(--border);
+    padding: 0 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+
+  .footer-title {
+    font-size: 0.6rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: var(--text-dim);
+  }
+
+  .footer-controls {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .footer-controls button {
+    cursor: pointer;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 5px 14px;
+    transition: all 0.15s ease;
+    text-transform: uppercase;
+  }
+
+  .footer-controls button:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--text-dim);
+  }
+
+  .footer-controls button.active {
+    background: rgba(0, 240, 255, 0.08);
+    border-color: var(--flash-cyan);
+    color: var(--flash-cyan);
+  }
+
+  .slider-container {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .slider-container span {
+    font-size: 0.6rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+  }
+
+  #badge-seq {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: #8a9ba8;
+  }
+
+  /* Confetti/Sparkle styling */
+  .sparkle {
+    position: absolute;
+    width: 4px;
+    height: 4px;
+    background: var(--flash-cyan);
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 999;
+  }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <h1>Standard vs Flash Attention: Memory &amp; IO Race</h1>
+  <div class="subtitle">O(N²) VS O(N) PEAK HBM MEMORY FOOTPRINT</div>
+</header>
+
+<!-- Main Viewport -->
+<main>
+  
+  <!-- Left Column: Standard Attention / Chart + GPU Kernel execution -->
+  <div class="column standard">
+    <div class="column-header standard-accent">STANDARD ATTENTION</div>
+    <div class="chart-box">
+      <div class="chart-header">
+        <h2>LIVE PEAK MEMORY USAGE (MB) VS. SEQUENCE LENGTH (N)</h2>
+      </div>
+      <div class="chart-canvas-container">
+        <canvas id="chart-canvas"></canvas>
+      </div>
+      
+      <!-- GPU Kernel Execution Panel -->
+      <div class="gpu-panel">
+        <div class="gpu-header">
+          <div class="gpu-title">⚡ Warp Specialization &amp; Parallelism</div>
+          <div class="gpu-tile-status" id="gpu-tile-status">Processing Tile 1 of 1</div>
+        </div>
+        
+        <div class="gpu-body">
+          <!-- Warp Grid -->
+          <div class="warp-container">
+            <div class="sram-watermark">SRAM</div>
+            <div class="warp-grid">
+              <div class="warp-box matmul" id="warp-0">W0</div>
+              <div class="warp-box matmul" id="warp-1">W1</div>
+              <div class="warp-box matmul" id="warp-2">W2</div>
+              <div class="warp-box softmax" id="warp-3">W3</div>
+              <div class="warp-box softmax" id="warp-4">W4</div>
+              <div class="warp-box output" id="warp-5">W5</div>
+              <div class="warp-box output" id="warp-6">W6</div>
+              <div class="warp-box output" id="warp-7">W7</div>
+            </div>
+            <div class="legend-row">
+              <span><span class="dot legend-green"></span>MatMul</span>
+              <span><span class="dot legend-blue"></span>Softmax</span>
+              <span><span class="dot legend-orange"></span>Output</span>
+            </div>
+          </div>
+
+          <!-- Parallel Heads -->
+          <div class="parallel-heads-container">
+            <div class="heads-title">🧠 Parallel Heads: 4 / 4</div>
+            <div class="head-bars">
+              <div class="head-bar-row">
+                <span class="head-lbl">Head 1</span>
+                <div class="head-bar-track"><div class="head-bar-fill" id="head-fill-1"></div></div>
+              </div>
+              <div class="head-bar-row">
+                <span class="head-lbl">Head 2</span>
+                <div class="head-bar-track"><div class="head-bar-fill" id="head-fill-2"></div></div>
+              </div>
+              <div class="head-bar-row">
+                <span class="head-lbl">Head 3</span>
+                <div class="head-bar-track"><div class="head-bar-fill" id="head-fill-3"></div></div>
+              </div>
+              <div class="head-bar-row">
+                <span class="head-lbl">Head 4</span>
+                <div class="head-bar-track"><div class="head-bar-fill" id="head-fill-4"></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="gpu-caption">
+          Flash Attention partitions work across warps to overlap memory transfers with computation.
+        </div>
+      </div>
+
+      <div class="chart-footer-stats">
+        <div>HBM Memory: <span id="hbm-memory-val">0.00 MB</span></div>
+        <div>Pairs: <span id="pairs-val">0</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right Column: Flash Attention / Stats -->
+  <div class="column flash">
+    <div class="column-header flash-accent">FLASH ATTENTION</div>
+    <div class="stats-box">
+      <h2>COMPARATIVE STATISTICS</h2>
+      <div class="stats-container">
+        
+        <!-- Standard Peak -->
+        <div class="stat-card red-card">
+          <span class="card-lbl">STANDARD PEAK</span>
+          <span class="card-val" id="std-peak-val">0.00 MB</span>
+        </div>
+        
+        <!-- Flash Peak -->
+        <div class="stat-card cyan-card">
+          <span class="card-lbl">FLASH PEAK</span>
+          <span class="card-val" id="flash-peak-val">0.00 MB</span>
+        </div>
+        
+        <!-- HBM Saved -->
+        <div class="stat-card green-card saved-card">
+          <span class="card-lbl">HBM SAVED</span>
+          <span class="card-val" id="hbm-saved-val">0%</span>
+          <span class="card-sub">At current N</span>
+        </div>
+        
+        <!-- Quadratic (N²) -->
+        <div class="stat-card">
+          <span class="card-lbl">Quadratic (N²)</span>
+          <span class="card-val" id="quad-n2-val">0.00 MB</span>
+        </div>
+        
+        <!-- Quadratic (N) -->
+        <div class="stat-card">
+          <span class="card-lbl">Quadratic (N)</span>
+          <span class="card-val" id="quad-n-val">0.00 MB</span>
+        </div>
+
+      </div>
+      
+      <!-- Winner Badge -->
+      <div id="winner-badge" class="winner-badge">✅ Flash Attention Wins!</div>
+    </div>
+  </div>
+
+</main>
+
+<!-- Footer -->
+<footer>
+  <div class="footer-title">QUICK LINKS</div>
+  <div class="footer-controls">
+    <button id="btn-play">Pause</button>
+    <button id="btn-step">Step</button>
+    <button id="btn-reset">Reset</button>
+    
+    <div class="slider-container">
+      <span>SPEED</span>
+      <input type="range" id="speed-range" min="1" max="3" value="2" />
+    </div>
+  </div>
+  <div id="badge-seq">N = 1 / 64</div>
+</footer>
+
+<script>
+  'use strict';
+
+  /* ═══ CONSTANTS & SETUP ═════════════════════ */
+  const MAX_N = 64;
+  const TILE_SIZE = 8;
+  
+  // DOM element references
+  const cvChart = document.getElementById('chart-canvas');
+  const ctxChart = cvChart.getContext('2d');
+  
+  const elHbmMemoryVal = document.getElementById('hbm-memory-val');
+  const elPairsVal = document.getElementById('pairs-val');
+  const elBadgeSeq = document.getElementById('badge-seq');
+  
+  const elStdPeak = document.getElementById('std-peak-val');
+  const elFlashPeak = document.getElementById('flash-peak-val');
+  const elHbmSaved = document.getElementById('hbm-saved-val');
+  const elQuadN2 = document.getElementById('quad-n2-val');
+  const elQuadN = document.getElementById('quad-n-val');
+  const elWinner = document.getElementById('winner-badge');
+  
+  const btnPlay = document.getElementById('btn-play');
+  const btnStep = document.getElementById('btn-step');
+  const btnReset = document.getElementById('btn-reset');
+  const speedRange = document.getElementById('speed-range');
+  
+  /* ═══ STATE VARIABLES ═══════════════════════ */
+  let currentN = 1;
+  let activeTileIndex = 1;
+  let warpPhase = 0; // 0: MatMul, 1: Softmax, 2: Output
+  
+  let paused = false;
+  let speedLevel = 2; // 1, 2, 3
+  let timer = null;
+  let isDone = false;
+  
+  let memoryHistoryStd = [];
+  let memoryHistoryFlash = [];
+  let maxMemoryObserved = 3.0; // Y axis limit (Standard Peak at N=64 is ~2.46 MB)
+
+  /* ═══ MATHEMATICAL MODEL DEFINITIONS ═════════ */
+  function calcStdMemory(n) {
+    return n * n * 0.0006;
+  }
+
+  function calcFlashMemory(n) {
+    return n * 0.005;
+  }
+
+  /* ═══ CANVAS SIZING ═════════════════════════ */
+  function resizeChart() {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = cvChart.parentNode.getBoundingClientRect();
+    cvChart.width = rect.width * dpr;
+    cvChart.height = rect.height * dpr;
+    cvChart.style.width = rect.width + 'px';
+    cvChart.style.height = rect.height + 'px';
+    drawChart(dpr);
+  }
+
+  /* ═══ DRAW BOTTOM CHART ═══════════════════════ */
+  function drawChart(dpr) {
+    const w = cvChart.width / dpr;
+    const h = cvChart.height / dpr;
+    ctxChart.save();
+    ctxChart.scale(dpr, dpr);
+
+    // Clear chart with background #111820
+    ctxChart.fillStyle = '#111820';
+    ctxChart.fillRect(0, 0, w, h);
+
+    // Chart dimensions
+    const padL = 40;
+    const padR = 20;
+    const padT = 30;
+    const padB = 25;
+    const cw = w - padL - padR;
+    const ch = h - padT - padB;
+
+    // Draw Grid Lines (Y-Axis) & Labels
+    ctxChart.strokeStyle = 'rgba(255, 255, 255, 0.035)';
+    ctxChart.lineWidth = 1;
+    const yGridCount = 4;
+    for (let i = 0; i <= yGridCount; i++) {
+      const y = padT + (ch / yGridCount) * i;
+      ctxChart.beginPath();
+      ctxChart.moveTo(padL, y);
+      ctxChart.lineTo(w - padR, y);
+      ctxChart.stroke();
+
+      // Labels Y axis
+      const val = maxMemoryObserved * (1 - i / yGridCount);
+      ctxChart.fillStyle = '#5c6b73';
+      ctxChart.font = '700 8px "Segoe UI", sans-serif';
+      ctxChart.textAlign = 'right';
+      ctxChart.textBaseline = 'middle';
+      ctxChart.fillText(val.toFixed(2) + ' MB', padL - 6, y);
+    }
+
+    // Draw X-Axis ticks & Labels
+    const xGridCount = 8;
+    for (let i = 0; i <= xGridCount; i++) {
+      const xVal = Math.round((MAX_N / xGridCount) * i);
+      const x = padL + (cw / MAX_N) * xVal;
+      
+      ctxChart.fillStyle = '#5c6b73';
+      ctxChart.font = '700 8px "Segoe UI", sans-serif';
+      ctxChart.textAlign = 'center';
+      ctxChart.textBaseline = 'top';
+      ctxChart.fillText(xVal, x, padT + ch + 5);
+    }
+
+    // Horizontal Dashed "SRAM Storage Limit: 10000 MB" near the top
+    const sramLimitY = padT + 12;
+    ctxChart.save();
+    ctxChart.strokeStyle = 'rgba(255, 215, 0, 0.35)';
+    ctxChart.lineWidth = 1.2;
+    ctxChart.setLineDash([4, 4]);
+    ctxChart.beginPath();
+    ctxChart.moveTo(padL, sramLimitY);
+    ctxChart.lineTo(w - padR, sramLimitY);
+    ctxChart.stroke();
+    ctxChart.restore();
+
+    ctxChart.fillStyle = '#ffd700';
+    ctxChart.font = 'bold 8px monospace';
+    ctxChart.textAlign = 'left';
+    ctxChart.fillText('SRAM Storage Limit: 10000 MB', padL + 6, sramLimitY - 4);
+
+    // Draw Standard Memory curve (Red Line)
+    if (memoryHistoryStd.length > 0) {
+      ctxChart.beginPath();
+      ctxChart.strokeStyle = '#ff3b5c';
+      ctxChart.lineWidth = 2.5;
+      for (let i = 0; i < memoryHistoryStd.length; i++) {
+        const x = padL + (cw / MAX_N) * memoryHistoryStd[i].n;
+        const y = padT + ch * (1 - memoryHistoryStd[i].mem / maxMemoryObserved);
+        if (i === 0) ctxChart.moveTo(x, y);
+        else ctxChart.lineTo(x, y);
+      }
+      ctxChart.stroke();
+    }
+
+    // Draw Flash Memory curve (Cyan Line)
+    if (memoryHistoryFlash.length > 0) {
+      ctxChart.beginPath();
+      ctxChart.strokeStyle = '#00f0ff';
+      ctxChart.lineWidth = 2.5;
+      for (let i = 0; i < memoryHistoryFlash.length; i++) {
+        const x = padL + (cw / MAX_N) * memoryHistoryFlash[i].n;
+        const y = padT + ch * (1 - memoryHistoryFlash[i].mem / maxMemoryObserved);
+        if (i === 0) ctxChart.moveTo(x, y);
+        else ctxChart.lineTo(x, y);
+      }
+      ctxChart.stroke();
+    }
+
+    // Vertical sweeping "NOW" line
+    const currentX = padL + (cw / MAX_N) * currentN;
+    const pulse = 0.5 + 0.5 * Math.abs(Math.sin(Date.now() / 250));
+    ctxChart.strokeStyle = `rgba(255, 255, 255, ${0.15 + 0.15 * pulse})`;
+    ctxChart.lineWidth = 1;
+    ctxChart.beginPath();
+    ctxChart.moveTo(currentX, padT);
+    ctxChart.lineTo(currentX, padT + ch);
+    ctxChart.stroke();
+
+    ctxChart.restore();
+  }
+
+  /* ── MAIN ANIMATION CONTROLLER ─────────────── */
+  function tick() {
+    if (paused || isDone) return;
+
+    const totalTiles = Math.ceil(currentN / TILE_SIZE) * Math.ceil(currentN / TILE_SIZE);
+    
+    // Advance Warp Phase
+    warpPhase++;
+    if (warpPhase > 2) {
+      warpPhase = 0;
+      activeTileIndex++;
+      
+      if (activeTileIndex > totalTiles) {
+        activeTileIndex = 1;
+        currentN++;
+        
+        if (currentN > MAX_N) {
+          currentN = MAX_N;
+          isDone = true;
+          showWinnerBadge();
+        } else {
+          // Record current metrics
+          const stdMem = calcStdMemory(currentN);
+          const flashMem = calcFlashMemory(currentN);
+          
+          memoryHistoryStd.push({ n: currentN, mem: stdMem });
+          memoryHistoryFlash.push({ n: currentN, mem: flashMem });
+          
+          updateUIElements(stdMem, flashMem);
+        }
+      } else {
+        const stdMem = calcStdMemory(currentN);
+        const flashMem = calcFlashMemory(currentN);
+        updateUIElements(stdMem, flashMem);
+      }
+    } else {
+      const stdMem = calcStdMemory(currentN);
+      const flashMem = calcFlashMemory(currentN);
+      updateUIElements(stdMem, flashMem);
+    }
+
+    if (!isDone) {
+      // Auto schedule next step based on speed
+      const stepTimeouts = [400, 160, 50]; 
+      const timeout = stepTimeouts[speedLevel - 1];
+      timer = setTimeout(tick, timeout);
+    }
+  }
+
+  /* ── STEP NAVIGATION ──────────────────────── */
+  function forceNextStep() {
+    if (isDone) {
+      resetSimulation();
+      return;
+    }
+    
+    const totalTiles = Math.ceil(currentN / TILE_SIZE) * Math.ceil(currentN / TILE_SIZE);
+    warpPhase++;
+    if (warpPhase > 2) {
+      warpPhase = 0;
+      activeTileIndex++;
+      
+      if (activeTileIndex > totalTiles) {
+        activeTileIndex = 1;
+        currentN++;
+        
+        if (currentN > MAX_N) {
+          currentN = MAX_N;
+          isDone = true;
+          showWinnerBadge();
+        } else {
+          const stdMem = calcStdMemory(currentN);
+          const flashMem = calcFlashMemory(currentN);
+          
+          memoryHistoryStd.push({ n: currentN, mem: stdMem });
+          memoryHistoryFlash.push({ n: currentN, mem: flashMem });
+          
+          updateUIElements(stdMem, flashMem);
+        }
+      } else {
+        const stdMem = calcStdMemory(currentN);
+        const flashMem = calcFlashMemory(currentN);
+        updateUIElements(stdMem, flashMem);
+      }
+    } else {
+      const stdMem = calcStdMemory(currentN);
+      const flashMem = calcFlashMemory(currentN);
+      updateUIElements(stdMem, flashMem);
+    }
+  }
+
+  /* ── UPDATE STATS & HTML TEXT UIs ──────────── */
+  function updateUIElements(stdMem, flashMem) {
+    elBadgeSeq.textContent = `N = ${currentN} / ${MAX_N}`;
+    
+    // Left column stats
+    elHbmMemoryVal.textContent = stdMem.toFixed(2) + ' MB';
+    elPairsVal.textContent = (currentN * currentN).toLocaleString();
+
+    // Right column card values
+    elStdPeak.textContent = stdMem.toFixed(2) + ' MB';
+    elFlashPeak.textContent = flashMem.toFixed(2) + ' MB';
+    
+    const savedPercent = ((stdMem - flashMem) / stdMem) * 100;
+    elHbmSaved.textContent = savedPercent.toFixed(0) + '%';
+    
+    elQuadN2.textContent = stdMem.toFixed(2) + ' MB';
+    elQuadN.textContent = flashMem.toFixed(2) + ' MB';
+
+    // GPU panel updates
+    const totalTiles = Math.ceil(currentN / TILE_SIZE) * Math.ceil(currentN / TILE_SIZE);
+    document.getElementById('gpu-tile-status').textContent = `Processing Tile ${activeTileIndex} of ${totalTiles}`;
+    
+    // Update Warp Grid Classes
+    for (let w = 0; w < 8; w++) {
+      const box = document.getElementById(`warp-${w}`);
+      box.className = 'warp-box'; // reset
+      
+      if (w <= 2) {
+        box.classList.add('matmul');
+        if (warpPhase === 0 && !isDone) box.classList.add('active');
+      } else if (w <= 4) {
+        box.classList.add('softmax');
+        if (warpPhase === 1 && !isDone) box.classList.add('active');
+      } else {
+        box.classList.add('output');
+        if (warpPhase === 2 && !isDone) box.classList.add('active');
+      }
+    }
+    
+    // Update Parallel Head Bars
+    for (let h = 1; h <= 4; h++) {
+      const fill = document.getElementById(`head-fill-${h}`);
+      let pct = 0;
+      if (isDone) {
+        pct = 100;
+      } else {
+        if (warpPhase === 0) {
+          pct = 25 + Math.random() * 15;
+        } else if (warpPhase === 1) {
+          pct = 55 + Math.random() * 15;
+        } else {
+          pct = 85 + Math.random() * 15;
+        }
+      }
+      fill.style.width = pct.toFixed(0) + '%';
+    }
+  }
+
+  /* ── RESET CONTROLLER ──────────────────────── */
+  function resetSimulation() {
+    clearTimeout(timer);
+    currentN = 1;
+    activeTileIndex = 1;
+    warpPhase = 0;
+    isDone = false;
+    
+    // Clear graphs
+    memoryHistoryStd = [{ n: 1, mem: calcStdMemory(1) }];
+    memoryHistoryFlash = [{ n: 1, mem: calcFlashMemory(1) }];
+
+    elWinner.classList.remove('show');
+    
+    updateUIElements(calcStdMemory(1), calcFlashMemory(1));
+
+    if (!paused) {
+      timer = setTimeout(tick, 200);
+    }
+  }
+
+  /* ── SHOW WINNER BADGE ─────────────────────── */
+  function showWinnerBadge() {
+    elWinner.classList.add('show');
+    createSparkles();
+  }
+
+  function createSparkles() {
+    const parentBounds = elWinner.getBoundingClientRect();
+    for (let i = 0; i < 30; i++) {
+      const sparkle = document.createElement('div');
+      sparkle.className = 'sparkle';
+      sparkle.style.left = (parentBounds.left + Math.random() * parentBounds.width) + 'px';
+      sparkle.style.top = (parentBounds.top + Math.random() * parentBounds.height) + 'px';
+      sparkle.style.backgroundColor = Math.random() > 0.5 ? 'var(--flash-cyan)' : 'var(--flash-magenta)';
+      document.body.appendChild(sparkle);
+
+      const angle = Math.random() * Math.PI * 2;
+      const velocity = 1.5 + Math.random() * 3.5;
+      let sx = 0;
+      let sy = 0;
+      
+      const animateSparkle = () => {
+        sx += Math.cos(angle) * velocity;
+        sy += Math.sin(angle) * velocity + 0.08; 
+        sparkle.style.transform = `translate(${sx}px, ${sy}px)`;
+        sparkle.style.opacity = parseFloat(sparkle.style.opacity || '1') - 0.025;
+
+        if (parseFloat(sparkle.style.opacity) > 0) {
+          requestAnimationFrame(animateSparkle);
+        } else {
+          sparkle.remove();
+        }
+      };
+      
+      sparkle.style.opacity = '1';
+      requestAnimationFrame(animateSparkle);
+    }
+  }
+
+  /* ── EVENT LISTENER REGISTRATIONS ──────────── */
+  btnPlay.addEventListener('click', () => {
+    paused = !paused;
+    btnPlay.textContent = paused ? 'Resume' : 'Pause';
+    btnPlay.classList.toggle('active', paused);
+    if (!paused) {
+      clearTimeout(timer);
+      tick();
+    }
+  });
+
+  btnStep.addEventListener('click', () => {
+    paused = true;
+    btnPlay.textContent = 'Resume';
+    btnPlay.classList.add('active');
+    clearTimeout(timer);
+    forceNextStep();
+  });
+
+  btnReset.addEventListener('click', resetSimulation);
+
+  speedRange.addEventListener('input', (e) => {
+    speedLevel = parseInt(e.target.value);
+  });
+
+  window.addEventListener('resize', resizeChart);
+
+  // Smooth drawing updater
+  requestAnimationFrame(function loop() {
+    drawChart(window.devicePixelRatio || 1);
+    requestAnimationFrame(loop);
+  });
+
+  /* ── BOOTSTRAP ────────────────────────────── */
+  resizeChart();
+  resetSimulation();
+  tick();
+
+</script>
+
+</body>
+</html>
